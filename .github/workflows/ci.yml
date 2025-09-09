@@ -1,12 +1,13 @@
 name: ci-cd
+
 on:
   push:
     branches: [ "master" ]
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: write     # commit, tag, release
+  packages: write     # push GHCR images
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}/simple-java-maven-app
@@ -14,6 +15,7 @@ env:
 jobs:
   build-release-publish:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,24 +30,30 @@ jobs:
           java-version: "21"
           cache: maven
 
-      # Bump version in pom.xml (uses Conventional Commits to pick major/minor/patch)
+      # Bump version in pom.xml (Conventional-Commits; or swap to your preferred bump action)
       - name: Bump Maven version
         id: bump
         uses: mickem/gh-action-bump-maven-version@v1
-        with:
-          # optional:
-          # pom-file: 'pom.xml'
-          # version-path: '/project/version'
-          # commit-message: 'Bump version'
+        # with:
+        #   pom-file: 'pom.xml'
+        #   version-path: '/project/version'
 
-      # Read the new version from pom.xml for tagging the image & release
+      # Read the exact bumped version so we can tag the release & image correctly
       - name: Read project.version
         id: readver
         run: echo "version=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)" >> $GITHUB_OUTPUT
 
+      - name: Create Git tag (matches pom version)
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git tag "v${{ steps.readver.outputs.version }}" || true
+          git push origin "v${{ steps.readver.outputs.version }}" || true
+
       - name: Create GitHub Release
         uses: actions/create-release@v1
-        env: { GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: v${{ steps.readver.outputs.version }}
           release_name: v${{ steps.readver.outputs.version }}
@@ -53,7 +61,7 @@ jobs:
           prerelease: false
 
       - name: Build JAR
-        run: mvn -B -q -e package -DskipTests
+        run: mvn -B -U -e -DskipTests -DskipITs -Dgpg.skip=true clean package
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
